@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { CameraRigState, StagePreset, AspectRatioMask, RigMovementParams } from './types';
+import { CameraRigState, StagePreset, AspectRatioMask, RigMovementParams, AppMode } from './types';
 import { STAGE_PRESETS, CAMERA_BODIES, LENSES } from './data/cameras';
 import { SceneManager } from './scene/SceneManager';
 import { DirectorHUD } from './components/DirectorHUD';
 import { RigController } from './components/RigController';
+import { StagingControls } from './components/StagingControls';
 import { CameraManager } from './components/CameraManager';
 import { StageControls } from './components/StageControls';
 import {
@@ -17,7 +18,13 @@ import {
   Play,
   RotateCcw,
   Sparkles,
-  Info
+  MapPin,
+  Film,
+  Radio,
+  Tv,
+  ArrowRight,
+  Eye,
+  Columns
 } from 'lucide-react';
 
 const INITIAL_RIGS: CameraRigState[] = [
@@ -288,37 +295,46 @@ const INITIAL_RIGS: CameraRigState[] = [
 ];
 
 export default function App() {
-  const mainCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const pipCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const arenaCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const povCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneManagerRef = useRef<SceneManager | null>(null);
+
+  // App Modes: STAGING (3D setup) | DIRECTOR (Live Rig + POV) | MULTIVIEW (Wall)
+  const [mode, setMode] = useState<AppMode>('STAGING');
 
   const [rigs, setRigs] = useState<CameraRigState[]>(INITIAL_RIGS);
   const [activeRigId, setActiveRigId] = useState<string>('cam-1');
   const [currentStagePreset, setCurrentStagePreset] = useState<StagePreset>(STAGE_PRESETS[0]);
 
-  // View modes
-  const [activeTab, setActiveTab] = useState<'CONTROLS' | 'CAMERAS' | 'STAGE'>('CONTROLS');
-  const [isPipFullscreen, setIsPipFullscreen] = useState<boolean>(false);
-  const [isPipVisible, setIsPipVisible] = useState<boolean>(true);
-  const [isMultiviewMode, setIsMultiviewMode] = useState<boolean>(false);
+  // Staging sidebar active tab
+  const [stagingTab, setStagingTab] = useState<'POSITION' | 'ALL_CAMERAS' | 'STAGE_THEMES'>('POSITION');
+  const [clickToPlaceEnabled, setClickToPlaceEnabled] = useState<boolean>(true);
+
+  // Director mode layout
+  const [directorLayout, setDirectorLayout] = useState<'SPLIT' | 'POV_DOMINANT' | 'STAGE_DOMINANT'>('SPLIT');
 
   // Viewfinder overlays
   const [aspectMask, setAspectMask] = useState<AspectRatioMask>('16:9');
   const [showGuides, setShowGuides] = useState<boolean>(true);
   const [showSafeAreas, setShowSafeAreas] = useState<boolean>(true);
 
-  // Active rig object
   const activeRig = rigs.find(r => r.id === activeRigId) || rigs[0];
 
-  // Initialize Scene
+  // Initialize SceneManager
   useEffect(() => {
-    if (!mainCanvasRef.current) return;
+    if (!arenaCanvasRef.current) return;
 
-    const mgr = new SceneManager(mainCanvasRef.current, pipCanvasRef.current || undefined);
+    const mgr = new SceneManager(arenaCanvasRef.current, povCanvasRef.current || undefined);
     sceneManagerRef.current = mgr;
 
     mgr.onSelectRig = (id: string) => {
       setActiveRigId(id);
+    };
+
+    mgr.onMoveRigPosition = (id: string, newPos: [number, number, number]) => {
+      setRigs(prev =>
+        prev.map(r => (r.id === id ? { ...r, basePosition: [newPos[0], r.basePosition[1], newPos[2]] } : r))
+      );
     };
 
     mgr.setStagePreset(currentStagePreset);
@@ -336,12 +352,13 @@ export default function App() {
     }
   }, [rigs, activeRigId]);
 
-  // Update PIP canvas reference
+  // Update POV canvas when switching modes or layout
   useEffect(() => {
     if (sceneManagerRef.current) {
-      sceneManagerRef.current.setPipCanvas(pipCanvasRef.current);
+      sceneManagerRef.current.setPovCanvas(povCanvasRef.current);
+      sceneManagerRef.current.handleResize();
     }
-  }, [isPipFullscreen, isMultiviewMode]);
+  }, [mode, directorLayout]);
 
   // Stage Preset change
   const handleSelectPreset = (preset: StagePreset) => {
@@ -370,12 +387,16 @@ export default function App() {
     setRigs(prev => prev.map(r => (r.id === activeRigId ? { ...r, ...updates } : r)));
   };
 
+  // Update active rig base position
+  const handleUpdateBasePosition = (newPos: [number, number, number]) => {
+    setRigs(prev => prev.map(r => (r.id === activeRigId ? { ...r, basePosition: newPos } : r)));
+  };
+
   // Tally Switch
   const handleSetTally = (id: string, tally: 'PROGRAM' | 'PREVIEW' | 'OFF') => {
     setRigs(prev =>
       prev.map(r => {
         if (tally === 'PROGRAM') {
-          // Only one camera on program at a time
           return r.id === id ? { ...r, tally: 'PROGRAM' } : r.tally === 'PROGRAM' ? { ...r, tally: 'OFF' } : r;
         }
         return r.id === id ? { ...r, tally } : r;
@@ -406,7 +427,6 @@ export default function App() {
   ) => {
     switch (move) {
       case 'HERO_CHORUS_DIVE': {
-        // Find crane or active
         const crane = rigs.find(r => r.mountType === 'CRANE') || activeRig;
         setActiveRigId(crane.id);
         handleUpdateMovement({
@@ -466,9 +486,9 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-neutral-950 text-neutral-100 select-none">
-      {/* TOP PRODUCTION HEADER BAR */}
-      <header className="h-12 bg-neutral-950/90 border-b border-neutral-800/80 px-4 flex items-center justify-between z-30 shrink-0 backdrop-blur-md">
-        {/* Left: App Branding */}
+      {/* TOP HEADER: BRANDING, MODE SWITCHER & TALLY */}
+      <header className="h-13 bg-neutral-950/95 border-b border-neutral-800 px-4 flex items-center justify-between z-30 shrink-0 backdrop-blur-md">
+        {/* Left: Branding & Active Stage */}
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-red-600 via-cyan-600 to-indigo-600 flex items-center justify-center p-0.5 shadow-md">
             <div className="w-full h-full bg-neutral-950 rounded-[7px] flex items-center justify-center">
@@ -479,199 +499,432 @@ export default function App() {
             <h1 className="font-bold text-sm tracking-wider flex items-center gap-2">
               <span>CINESTAGE 3D</span>
               <span className="text-[10px] px-1.5 py-0.2 bg-red-600/20 text-red-400 border border-red-500/30 rounded font-mono font-normal">
-                MULTICAM & RIG PREVIZ
+                CONCERT PREVIZ
               </span>
             </h1>
-            <p className="text-[10px] text-neutral-400 font-mono hidden sm:block">
-              Stage: <span className="text-cyan-400">{currentStagePreset.name}</span>
-            </p>
           </div>
         </div>
 
-        {/* Center: Live PGM / PRV Status Pill */}
-        <div className="hidden md:flex items-center gap-2 font-mono text-xs bg-neutral-900 border border-neutral-800 px-3 py-1 rounded-full">
-          <span className="text-neutral-500">LIVE PGM:</span>
-          <span className="text-red-400 font-bold animate-pulse">
-            {rigs.find(r => r.tally === 'PROGRAM')?.name || 'NONE'}
-          </span>
-          <span className="text-neutral-600">|</span>
-          <span className="text-neutral-500">PRV:</span>
-          <span className="text-emerald-400 font-bold">
-            {rigs.find(r => r.tally === 'PREVIEW')?.name || 'NONE'}
-          </span>
+        {/* Center: THE 3 WORKFLOW MODES */}
+        <div className="flex items-center gap-1.5 bg-neutral-900/90 border border-neutral-700/80 p-1 rounded-xl shadow-inner font-sans text-xs">
+          {/* Mode 1: 3D Stage Setup */}
+          <button
+            onClick={() => setMode('STAGING')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+              mode === 'STAGING'
+                ? 'bg-cyan-600 text-white shadow-md shadow-cyan-950 ring-1 ring-cyan-400'
+                : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/60'
+            }`}
+          >
+            <MapPin className="w-3.5 h-3.5" />
+            <span>1. 3D Stage Setup</span>
+          </button>
+
+          {/* Mode 2: Director Mode (Rig & POV) */}
+          <button
+            onClick={() => setMode('DIRECTOR')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+              mode === 'DIRECTOR'
+                ? 'bg-gradient-to-r from-red-600 to-indigo-600 text-white shadow-md shadow-red-950 ring-1 ring-red-400'
+                : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/60'
+            }`}
+          >
+            <Film className="w-3.5 h-3.5" />
+            <span>2. Director Mode (Rig & POV)</span>
+          </button>
+
+          {/* Mode 3: Broadcast Multiviewer */}
+          <button
+            onClick={() => setMode('MULTIVIEW')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+              mode === 'MULTIVIEW'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-950 ring-1 ring-indigo-400'
+                : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/60'
+            }`}
+          >
+            <Tv className="w-3.5 h-3.5" />
+            <span>3. Multiview Wall</span>
+          </button>
         </div>
 
-        {/* Right: View Toggles & Presets */}
-        <div className="flex items-center gap-2 text-xs">
-          {/* Multiview Mode button */}
-          <button
-            onClick={() => setIsMultiviewMode(!isMultiviewMode)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border font-medium transition-colors ${
-              isMultiviewMode
-                ? 'bg-indigo-600 text-white border-indigo-500 shadow-md'
-                : 'bg-neutral-900 text-neutral-300 border-neutral-700 hover:bg-neutral-800'
-            }`}
-          >
-            <LayoutGrid className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">{isMultiviewMode ? 'Exit Multiview' : 'OB Multiviewer'}</span>
-          </button>
-
-          {/* PIP Viewfinder Fullscreen Eyepiece mode */}
-          <button
-            onClick={() => setIsPipFullscreen(!isPipFullscreen)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border font-medium transition-colors ${
-              isPipFullscreen
-                ? 'bg-cyan-600 text-white border-cyan-500 shadow-md'
-                : 'bg-neutral-900 text-neutral-300 border-neutral-700 hover:bg-neutral-800'
-            }`}
-          >
-            {isPipFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-            <span className="hidden sm:inline">{isPipFullscreen ? 'Exit Eyepiece' : 'Director POV'}</span>
-          </button>
+        {/* Right: Live PGM Status & Camera Switcher shortcut */}
+        <div className="flex items-center gap-3">
+          <div className="hidden lg:flex items-center gap-2 font-mono text-xs bg-neutral-900 border border-neutral-800 px-3 py-1 rounded-full">
+            <span className="text-neutral-500">ON AIR:</span>
+            <span className="text-red-400 font-bold animate-pulse">
+              {rigs.find(r => r.tally === 'PROGRAM')?.name || 'NONE'}
+            </span>
+          </div>
         </div>
       </header>
 
-      {/* MAIN WORKSPACE BODY */}
-      <div className="relative flex-1 w-full h-[calc(100vh-3rem)] overflow-hidden">
-        {/* THREE.JS MAIN 3D ARENA CANVAS */}
-        <canvas
-          ref={mainCanvasRef}
-          className="w-full h-full block cursor-grab active:cursor-grabbing outline-none"
-        />
-
-        {/* 3D ARENA INSTRUCTIONS PILL (Bottom left) */}
-        {!isPipFullscreen && (
-          <div className="absolute bottom-3 left-4 z-20 pointer-events-none bg-neutral-950/70 backdrop-blur-md px-3 py-1.5 rounded-lg border border-neutral-800/80 text-[11px] text-neutral-400 font-mono flex items-center gap-3">
-            <span>Left Click + Drag: Orbit Arena</span>
-            <span>•</span>
-            <span>Right Click: Pan</span>
-            <span>•</span>
-            <span>Scroll: Zoom</span>
-            <span>•</span>
-            <span className="text-cyan-400">Click any Rig to Select</span>
-          </div>
-        )}
-
-        {/* FLOATING / DOCKED PICTURE-IN-PICTURE (PIP) CAMERA VIEWFINDER */}
-        {isPipVisible && (
-          <div
-            className={`z-20 transition-all duration-200 overflow-hidden shadow-2xl rounded-xl border border-neutral-700 bg-neutral-950 ${
-              isPipFullscreen
-                ? 'absolute inset-0 rounded-none border-none'
-                : 'absolute top-4 right-4 w-[420px] sm:w-[480px] aspect-video border-2 border-cyan-500/70 shadow-cyan-950/40'
-            }`}
-          >
-            {/* Viewfinder Video Output Canvas */}
+      {/* WORKSPACE VIEWPORTS CONTAINER */}
+      <div className="relative flex-1 w-full h-[calc(100vh-3.25rem)] overflow-hidden">
+        {/* ========================================================================= */}
+        {/* WORKFLOW 1: 3D STAGE SETUP MODE (Position rig & camera of choice)        */}
+        {/* ========================================================================= */}
+        {mode === 'STAGING' && (
+          <div className="relative w-full h-full">
+            {/* 3D ARENA CANVAS (Full screen stage view with orbit & click-to-place) */}
             <canvas
-              ref={pipCanvasRef}
-              width={1280}
-              height={720}
-              className="w-full h-full block object-cover"
+              ref={arenaCanvasRef}
+              className="w-full h-full block cursor-grab active:cursor-grabbing outline-none"
             />
 
-            {/* Broadcast Director HUD Overlays */}
-            <DirectorHUD
-              rig={activeRig}
-              isFullscreen={isPipFullscreen}
-              onToggleFullscreen={() => setIsPipFullscreen(!isPipFullscreen)}
-              aspectMask={aspectMask}
-              onSetAspectMask={setAspectMask}
-              showGuides={showGuides}
-              onToggleGuides={() => setShowGuides(!showGuides)}
-              showSafeAreas={showSafeAreas}
-              onToggleSafeAreas={() => setShowSafeAreas(!showSafeAreas)}
-            />
+            {/* Instruction Banner at bottom center */}
+            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 pointer-events-none bg-neutral-950/85 backdrop-blur-md px-4 py-2 rounded-xl border border-cyan-500/40 text-xs font-mono text-neutral-200 shadow-xl flex items-center gap-3">
+              <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+              <span>
+                <strong className="text-cyan-400">STAGING MODE:</strong> Left click + drag to orbit stage • Click anywhere on stage floor to position rig • Click any camera to select
+              </span>
+            </div>
+
+            {/* LEFT DOCK: Staging & Rig Placement Controls */}
+            <div className="absolute top-4 left-4 z-20 w-84 sm:w-96 flex flex-col gap-2">
+              {/* Tab selector */}
+              <div className="flex items-center gap-1 bg-neutral-900/90 backdrop-blur-md p-1 rounded-xl border border-neutral-800 text-xs font-medium">
+                <button
+                  onClick={() => setStagingTab('POSITION')}
+                  className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-colors ${
+                    stagingTab === 'POSITION' ? 'bg-cyan-600 text-white font-bold shadow' : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  <MapPin className="w-3.5 h-3.5" />
+                  <span>Position & Rig</span>
+                </button>
+                <button
+                  onClick={() => setStagingTab('ALL_CAMERAS')}
+                  className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-colors ${
+                    stagingTab === 'ALL_CAMERAS' ? 'bg-cyan-600 text-white font-bold shadow' : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  <Video className="w-3.5 h-3.5" />
+                  <span>Cameras ({rigs.length})</span>
+                </button>
+                <button
+                  onClick={() => setStagingTab('STAGE_THEMES')}
+                  className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-colors ${
+                    stagingTab === 'STAGE_THEMES' ? 'bg-cyan-600 text-white font-bold shadow' : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>Stage Theme</span>
+                </button>
+              </div>
+
+              {/* Tab Contents */}
+              {stagingTab === 'POSITION' && (
+                <StagingControls
+                  activeRig={activeRig}
+                  onUpdateRig={handleUpdateRig}
+                  onUpdateBasePosition={handleUpdateBasePosition}
+                  clickToPlaceEnabled={clickToPlaceEnabled}
+                  onToggleClickToPlace={() => setClickToPlaceEnabled(!clickToPlaceEnabled)}
+                  onProceedToDirectorMode={() => setMode('DIRECTOR')}
+                />
+              )}
+
+              {stagingTab === 'ALL_CAMERAS' && (
+                <CameraManager
+                  rigs={rigs}
+                  activeRigId={activeRigId}
+                  onSelectRig={setActiveRigId}
+                  onAddRig={handleAddRig}
+                  onRemoveRig={handleRemoveRig}
+                  onSetTally={handleSetTally}
+                />
+              )}
+
+              {stagingTab === 'STAGE_THEMES' && (
+                <StageControls
+                  currentPreset={currentStagePreset}
+                  onSelectPreset={handleSelectPreset}
+                  onSelectDirectorView={handleDirectorView}
+                />
+              )}
+            </div>
+
+            {/* TOP RIGHT: Real-time PIP Viewfinder preview of the active camera */}
+            <div className="absolute top-4 right-4 z-20 w-[400px] sm:w-[460px] aspect-video rounded-xl overflow-hidden shadow-2xl border-2 border-cyan-500/80 bg-neutral-950">
+              <canvas
+                ref={povCanvasRef}
+                width={1280}
+                height={720}
+                className="w-full h-full block object-cover"
+              />
+              <DirectorHUD
+                rig={activeRig}
+                isFullscreen={false}
+                onToggleFullscreen={() => setMode('DIRECTOR')}
+                aspectMask={aspectMask}
+                onSetAspectMask={setAspectMask}
+                showGuides={showGuides}
+                onToggleGuides={() => setShowGuides(!showGuides)}
+                showSafeAreas={showSafeAreas}
+                onToggleSafeAreas={() => setShowSafeAreas(!showSafeAreas)}
+              />
+            </div>
           </div>
         )}
 
-        {/* SIDE CONTROL PANEL DOCK (Left side) */}
-        <div
-          className={`absolute top-4 left-4 z-20 w-80 sm:w-96 flex flex-col gap-2 transition-all ${
-            isPipFullscreen ? 'hidden' : 'block'
-          }`}
-        >
-          {/* TAB BAR NAVIGATION */}
-          <div className="flex items-center gap-1 bg-neutral-900/90 backdrop-blur-md p-1 rounded-xl border border-neutral-800 text-xs font-medium">
-            <button
-              onClick={() => setActiveTab('CONTROLS')}
-              className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-colors ${
-                activeTab === 'CONTROLS'
-                  ? 'bg-cyan-600 text-white font-bold shadow'
-                  : 'text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              <Sliders className="w-3.5 h-3.5" />
-              <span>Rig Controls</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('CAMERAS')}
-              className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-colors ${
-                activeTab === 'CAMERAS'
-                  ? 'bg-cyan-600 text-white font-bold shadow'
-                  : 'text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              <Video className="w-3.5 h-3.5" />
-              <span>Cameras ({rigs.length})</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('STAGE')}
-              className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-colors ${
-                activeTab === 'STAGE'
-                  ? 'bg-cyan-600 text-white font-bold shadow'
-                  : 'text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              <Layers className="w-3.5 h-3.5" />
-              <span>3D Stage</span>
-            </button>
-          </div>
+        {/* ========================================================================= */}
+        {/* WORKFLOW 2: DIRECTOR MODE (Control Rig while observing Camera POV)       */}
+        {/* ========================================================================= */}
+        {mode === 'DIRECTOR' && (
+          <div className="relative w-full h-full flex flex-col bg-neutral-950">
+            {/* DIRECTOR CONSOLE HEADER STRIP */}
+            <div className="h-10 bg-neutral-900 border-b border-neutral-800 px-4 flex items-center justify-between z-20 text-xs shrink-0">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-neutral-100 flex items-center gap-1.5 font-mono">
+                  <Film className="w-3.5 h-3.5 text-red-500" />
+                  <span>DIRECTOR CONSOLE:</span>
+                  <span className="text-cyan-400">{activeRig.name}</span>
+                </span>
+                <span className="text-neutral-500">•</span>
+                <span className="text-neutral-300 font-mono text-[11px]">
+                  {CAMERA_BODIES[activeRig.bodyId].name} on {activeRig.mountType}
+                </span>
+              </div>
 
-          {/* ACTIVE TAB CONTENT */}
-          <div className="max-h-[calc(100vh-8.5rem)] overflow-y-auto pr-0.5">
-            {activeTab === 'CONTROLS' && (
-              <RigController
-                rig={activeRig}
-                onUpdateMovement={handleUpdateMovement}
-                onUpdateRig={handleUpdateRig}
-                onTriggerPresetMove={handleTriggerPresetMove}
-              />
-            )}
-            {activeTab === 'CAMERAS' && (
-              <CameraManager
-                rigs={rigs}
-                activeRigId={activeRigId}
-                onSelectRig={setActiveRigId}
-                onAddRig={handleAddRig}
-                onRemoveRig={handleRemoveRig}
-                onSetTally={handleSetTally}
-              />
-            )}
-            {activeTab === 'STAGE' && (
-              <StageControls
-                currentPreset={currentStagePreset}
-                onSelectPreset={handleSelectPreset}
-                onSelectDirectorView={handleDirectorView}
-              />
-            )}
-          </div>
-        </div>
+              {/* Layout Switcher & Actions */}
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1 bg-neutral-950 border border-neutral-800 p-0.5 rounded-lg text-[11px] font-medium">
+                  <button
+                    onClick={() => setDirectorLayout('SPLIT')}
+                    className={`px-2 py-0.5 rounded transition-colors ${
+                      directorLayout === 'SPLIT' ? 'bg-cyan-600 text-white font-bold' : 'text-neutral-400 hover:text-white'
+                    }`}
+                  >
+                    Split 50/50
+                  </button>
+                  <button
+                    onClick={() => setDirectorLayout('POV_DOMINANT')}
+                    className={`px-2 py-0.5 rounded transition-colors ${
+                      directorLayout === 'POV_DOMINANT' ? 'bg-cyan-600 text-white font-bold' : 'text-neutral-400 hover:text-white'
+                    }`}
+                  >
+                    POV + PIP Stage
+                  </button>
+                  <button
+                    onClick={() => setDirectorLayout('STAGE_DOMINANT')}
+                    className={`px-2 py-0.5 rounded transition-colors ${
+                      directorLayout === 'STAGE_DOMINANT' ? 'bg-cyan-600 text-white font-bold' : 'text-neutral-400 hover:text-white'
+                    }`}
+                  >
+                    Stage + PIP POV
+                  </button>
+                </div>
 
-        {/* MULTIVIEWER WALL OVERLAY (When OB Multiviewer mode is active) */}
-        {isMultiviewMode && (
+                <button
+                  onClick={() => setMode('STAGING')}
+                  className="px-2.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-medium text-xs border border-neutral-700"
+                >
+                  Adjust 3D Placement
+                </button>
+              </div>
+            </div>
+
+            {/* DUAL VIEWPORT + RIG CONTROLLER BODY */}
+            <div className="flex-1 flex overflow-hidden">
+              {/* VIEWPORTS AREA (Left / Center) */}
+              <div className="flex-1 relative flex overflow-hidden">
+                {/* LAYOUT 1: SPLIT 50/50 */}
+                {directorLayout === 'SPLIT' && (
+                  <div className="w-full h-full flex flex-col md:flex-row">
+                    {/* LEFT PANE: CAMERA OPTICAL POV (What the camera sees) */}
+                    <div className="flex-1 relative border-r border-neutral-800 bg-black overflow-hidden">
+                      <canvas
+                        ref={povCanvasRef}
+                        width={1280}
+                        height={720}
+                        className="w-full h-full block object-cover"
+                      />
+                      <DirectorHUD
+                        rig={activeRig}
+                        isFullscreen={false}
+                        onToggleFullscreen={() => setDirectorLayout('POV_DOMINANT')}
+                        aspectMask={aspectMask}
+                        onSetAspectMask={setAspectMask}
+                        showGuides={showGuides}
+                        onToggleGuides={() => setShowGuides(!showGuides)}
+                        showSafeAreas={showSafeAreas}
+                        onToggleSafeAreas={() => setShowSafeAreas(!showSafeAreas)}
+                      />
+                      <div className="absolute top-3 left-3 pointer-events-none z-10 px-2 py-0.5 rounded bg-black/75 border border-cyan-500/50 text-[10px] font-mono text-cyan-400 font-bold">
+                        CAMERA POV (OPTICAL OUTPUT)
+                      </div>
+                    </div>
+
+                    {/* RIGHT PANE: 3D STAGE & RIG OBSERVER VIEW (Watch the rig move in 3D) */}
+                    <div className="flex-1 relative bg-neutral-950 overflow-hidden">
+                      <canvas
+                        ref={arenaCanvasRef}
+                        className="w-full h-full block cursor-grab active:cursor-grabbing outline-none"
+                      />
+                      <div className="absolute top-3 left-3 pointer-events-none z-10 px-2 py-0.5 rounded bg-black/75 border border-neutral-700 text-[10px] font-mono text-neutral-300 font-bold">
+                        3D STAGE OBSERVER (RIG PERSPECTIVE)
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* LAYOUT 2: POV DOMINANT + PIP 3D STAGE */}
+                {directorLayout === 'POV_DOMINANT' && (
+                  <div className="w-full h-full relative">
+                    <canvas
+                      ref={povCanvasRef}
+                      width={1280}
+                      height={720}
+                      className="w-full h-full block object-cover"
+                    />
+                    <DirectorHUD
+                      rig={activeRig}
+                      isFullscreen={true}
+                      onToggleFullscreen={() => setDirectorLayout('SPLIT')}
+                      aspectMask={aspectMask}
+                      onSetAspectMask={setAspectMask}
+                      showGuides={showGuides}
+                      onToggleGuides={() => setShowGuides(!showGuides)}
+                      showSafeAreas={showSafeAreas}
+                      onToggleSafeAreas={() => setShowSafeAreas(!showSafeAreas)}
+                    />
+
+                    {/* PIP 3D Stage Observer */}
+                    <div className="absolute bottom-4 right-4 w-72 sm:w-88 aspect-video rounded-xl overflow-hidden shadow-2xl border-2 border-neutral-700 bg-neutral-950 z-20">
+                      <canvas
+                        ref={arenaCanvasRef}
+                        className="w-full h-full block cursor-grab active:cursor-grabbing"
+                      />
+                      <div className="absolute top-2 left-2 pointer-events-none px-2 py-0.5 rounded bg-black/80 text-[10px] font-mono text-neutral-300">
+                        3D STAGE OBSERVER
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* LAYOUT 3: STAGE DOMINANT + PIP POV */}
+                {directorLayout === 'STAGE_DOMINANT' && (
+                  <div className="w-full h-full relative">
+                    <canvas
+                      ref={arenaCanvasRef}
+                      className="w-full h-full block cursor-grab active:cursor-grabbing outline-none"
+                    />
+                    <div className="absolute top-4 right-4 w-72 sm:w-96 aspect-video rounded-xl overflow-hidden shadow-2xl border-2 border-cyan-500/80 bg-black z-20">
+                      <canvas
+                        ref={povCanvasRef}
+                        width={1280}
+                        height={720}
+                        className="w-full h-full block object-cover"
+                      />
+                      <DirectorHUD
+                        rig={activeRig}
+                        isFullscreen={false}
+                        onToggleFullscreen={() => setDirectorLayout('POV_DOMINANT')}
+                        aspectMask={aspectMask}
+                        onSetAspectMask={setAspectMask}
+                        showGuides={showGuides}
+                        onToggleGuides={() => setShowGuides(!showGuides)}
+                        showSafeAreas={showSafeAreas}
+                        onToggleSafeAreas={() => setShowSafeAreas(!showSafeAreas)}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* RIGHT DOCK: REAL-TIME RIG MOVEMENT CONTROLS CONSOLE */}
+              <div className="w-80 sm:w-96 p-3 bg-neutral-950/90 border-l border-neutral-800 overflow-y-auto">
+                <RigController
+                  rig={activeRig}
+                  onUpdateMovement={handleUpdateMovement}
+                  onUpdateRig={handleUpdateRig}
+                  onTriggerPresetMove={handleTriggerPresetMove}
+                />
+              </div>
+            </div>
+
+            {/* BOTTOM BAR: BROADCAST CAMERA SWITCHER STRIP */}
+            <div className="h-14 bg-neutral-950 border-t border-neutral-800/90 px-4 flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-2 overflow-x-auto py-1">
+                <span className="text-[11px] font-mono text-neutral-400 shrink-0 font-bold">SWITCH CAMERA:</span>
+                {rigs.map((rig, idx) => {
+                  const isCurrent = rig.id === activeRigId;
+                  return (
+                    <button
+                      key={rig.id}
+                      onClick={() => setActiveRigId(rig.id)}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border font-mono text-xs transition-all cursor-pointer shrink-0 ${
+                        isCurrent
+                          ? 'bg-neutral-800 border-cyan-400 ring-2 ring-cyan-500/40 text-white font-bold'
+                          : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-800'
+                      }`}
+                    >
+                      <span
+                        className="w-2.5 h-2.5 rounded-full"
+                        style={{ backgroundColor: rig.colorTag }}
+                      />
+                      <span>CAM {idx + 1}</span>
+                      <span className="text-[10px] text-neutral-400">({rig.mountType})</span>
+                      {rig.tally === 'PROGRAM' && (
+                        <span className="px-1.5 py-0.2 rounded bg-red-600 text-white font-bold text-[9px] animate-pulse">
+                          PGM
+                        </span>
+                      )}
+                      {rig.tally === 'PREVIEW' && (
+                        <span className="px-1.5 py-0.2 rounded bg-emerald-600 text-white font-bold text-[9px]">
+                          PRV
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Tally Cut Buttons for currently active camera */}
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => handleSetTally(activeRig.id, 'PROGRAM')}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold font-mono tracking-wider transition-colors ${
+                    activeRig.tally === 'PROGRAM'
+                      ? 'bg-red-600 text-white shadow-lg shadow-red-950 animate-pulse'
+                      : 'bg-neutral-800 text-red-400 hover:bg-red-600 hover:text-white border border-red-900'
+                  }`}
+                >
+                  CUT PGM
+                </button>
+                <button
+                  onClick={() => handleSetTally(activeRig.id, 'PREVIEW')}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold font-mono tracking-wider transition-colors ${
+                    activeRig.tally === 'PREVIEW'
+                      ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-950'
+                      : 'bg-neutral-800 text-emerald-400 hover:bg-emerald-600 hover:text-white border border-emerald-900'
+                  }`}
+                >
+                  TAKE PRV
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* WORKFLOW 3: BROADCAST MULTIVIEWER WALL (6 Channels)                      */}
+        {/* ========================================================================= */}
+        {mode === 'MULTIVIEW' && (
           <div className="absolute inset-0 z-40 bg-neutral-950 p-4 flex flex-col gap-3">
             <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
               <div className="flex items-center gap-2">
                 <LayoutGrid className="w-5 h-5 text-indigo-400" />
-                <h2 className="text-base font-bold text-white tracking-wider">
-                  PRODUCTION CONTROL MULTIVIEWER WALL (6 CHANNELS)
+                <h2 className="text-base font-bold text-white tracking-wider font-mono">
+                  OB TRUCK MULTIVIEWER WALL • {rigs.length} CHANNELS LIVE
                 </h2>
               </div>
               <button
-                onClick={() => setIsMultiviewMode(false)}
-                className="px-3 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-xs font-semibold text-neutral-200"
+                onClick={() => setMode('DIRECTOR')}
+                className="px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 text-white text-xs font-bold shadow-md flex items-center gap-1.5"
               >
-                Exit Multiviewer
+                <span>Open Director Mode</span>
+                <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
 
@@ -684,24 +937,26 @@ export default function App() {
                     key={rig.id}
                     onClick={() => {
                       setActiveRigId(rig.id);
-                      setIsMultiviewMode(false);
+                      setMode('DIRECTOR');
                     }}
-                    className={`relative rounded-xl overflow-hidden border-2 cursor-pointer flex flex-col justify-between p-2.5 transition-all ${
+                    className={`relative rounded-xl overflow-hidden border-2 cursor-pointer flex flex-col justify-between p-3 transition-all ${
                       isSelected
                         ? 'border-cyan-400 ring-2 ring-cyan-500/40 bg-neutral-900'
                         : rig.tally === 'PROGRAM'
-                        ? 'border-red-600 bg-neutral-900'
-                        : 'border-neutral-800 bg-neutral-950/80 hover:border-neutral-700'
+                        ? 'border-red-600 bg-neutral-900/90 shadow-lg shadow-red-950/50'
+                        : rig.tally === 'PREVIEW'
+                        ? 'border-emerald-500 bg-neutral-900/80'
+                        : 'border-neutral-800 bg-neutral-950 hover:border-neutral-700'
                     }`}
                   >
                     {/* Top status */}
-                    <div className="flex items-center justify-between z-10 font-mono text-[11px]">
-                      <span className="font-bold text-white flex items-center gap-1.5">
+                    <div className="flex items-center justify-between z-10 font-mono text-xs">
+                      <span className="font-bold text-white flex items-center gap-2">
                         <span
-                          className="w-2.5 h-2.5 rounded-full"
+                          className="w-3 h-3 rounded-full"
                           style={{ backgroundColor: rig.colorTag }}
                         />
-                        {rig.name}
+                        <span>{rig.name}</span>
                       </span>
                       <div
                         className={`px-2 py-0.5 rounded font-bold text-[10px] ${
@@ -712,25 +967,45 @@ export default function App() {
                             : 'bg-neutral-800 text-neutral-400'
                         }`}
                       >
-                        {rig.tally}
+                        {rig.tally === 'PROGRAM' ? 'PROGRAM' : rig.tally === 'PREVIEW' ? 'PREVIEW' : 'STANDBY'}
                       </div>
                     </div>
 
                     {/* Camera Spec Banner in center */}
-                    <div className="flex flex-col items-center justify-center my-auto py-6">
-                      <div className="text-2xl font-bold font-mono text-neutral-200 tracking-wider">
+                    <div className="flex flex-col items-center justify-center my-auto py-5">
+                      <div className="text-3xl font-bold font-mono text-neutral-200 tracking-wider">
                         CAM {idx + 1}
                       </div>
-                      <div className="text-xs text-cyan-400 font-semibold">{body.name}</div>
-                      <div className="text-[11px] text-neutral-400 font-mono mt-1">
-                        {rig.mountType} • {Math.round(rig.focalLength)}mm
+                      <div className="text-xs text-cyan-400 font-semibold mt-1">{body.name}</div>
+                      <div className="text-xs text-neutral-400 font-mono mt-0.5">
+                        {rig.mountType} • {Math.round(rig.focalLength)}mm {rig.aperture}
                       </div>
+                      <span className="text-[10px] text-neutral-500 font-mono mt-1">
+                        Pos: [{rig.basePosition[0].toFixed(1)}, {rig.basePosition[2].toFixed(1)}]
+                      </span>
                     </div>
 
                     {/* Bottom controls */}
-                    <div className="flex items-center justify-between z-10 text-[10px] font-mono text-neutral-400 border-t border-neutral-800/80 pt-1.5">
+                    <div className="flex items-center justify-between z-10 text-[11px] font-mono text-neutral-400 border-t border-neutral-800/80 pt-2">
                       <span>{body.resolution}</span>
-                      <span className="text-cyan-400">Click to Switch</span>
+                      <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+                        <button
+                          onClick={() => handleSetTally(rig.id, rig.tally === 'PROGRAM' ? 'OFF' : 'PROGRAM')}
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            rig.tally === 'PROGRAM' ? 'bg-red-600 text-white' : 'bg-neutral-800 hover:text-white'
+                          }`}
+                        >
+                          PGM
+                        </button>
+                        <button
+                          onClick={() => handleSetTally(rig.id, rig.tally === 'PREVIEW' ? 'OFF' : 'PREVIEW')}
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            rig.tally === 'PREVIEW' ? 'bg-emerald-600 text-white' : 'bg-neutral-800 hover:text-white'
+                          }`}
+                        >
+                          PRV
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );

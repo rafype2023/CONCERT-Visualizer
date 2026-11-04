@@ -497,3 +497,4 @@ export class CameraRigModels {
     return new THREE.LineSegments(geom, mat);
   }
 }
+

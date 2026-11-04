@@ -356,3 +356,4 @@ export const CameraManager: React.FC<CameraManagerProps> = ({
     </div>
   );
 };
+

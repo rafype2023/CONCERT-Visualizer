@@ -279,3 +279,4 @@ export const STAGE_PRESETS: StagePreset[] = [
     crowdDensity: 'MEDIUM'
   }
 ];
+

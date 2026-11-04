@@ -214,3 +214,4 @@ export function computeRigWorldTransform(rig: CameraRigState, timeSec: number = 
     lookAtDirection: forward
   };
 }
+

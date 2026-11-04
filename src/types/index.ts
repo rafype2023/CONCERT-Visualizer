@@ -1,5 +1,7 @@
 export type CameraBodyId = 'FX6' | 'BURANO' | 'VENICE2' | 'FR7';
 
+export type AppMode = 'STAGING' | 'DIRECTOR' | 'MULTIVIEW';
+
 export interface CameraBodySpec {
   id: CameraBodyId;
   name: string;
@@ -112,3 +114,4 @@ export interface StagePreset {
   trussStyle: 'CONCERT_HIGH' | 'STADIUM_MASSIVE' | 'FESTIVAL_ARCH';
   crowdDensity: 'PACKED' | 'MEDIUM' | 'ARENA_FULL';
 }
+

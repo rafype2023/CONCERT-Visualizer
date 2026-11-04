@@ -6,77 +6,128 @@ import { computeRigWorldTransform, calculateVerticalFov } from '../utils/optics'
 import { CAMERA_BODIES } from '../data/cameras';
 
 export class SceneManager {
-  private mainCanvas: HTMLCanvasElement;
-  private pipCanvas: HTMLCanvasElement | null = null;
-  private renderer: THREE.WebGLRenderer;
+  private arenaCanvas: HTMLCanvasElement;
+  private povCanvas: HTMLCanvasElement | null = null;
+  private arenaRenderer: THREE.WebGLRenderer;
+  private povRenderer: THREE.WebGLRenderer | null = null;
   private scene: THREE.Scene;
   private stageBuilder: StageBuilder;
 
   // Director Viewport Camera (Orbit / Arena perspective)
   public directorCamera: THREE.PerspectiveCamera;
-  private directorTarget: THREE.Vector3 = new THREE.Vector3(0, 3, 0);
-  private directorRadius: number = 32;
-  private directorTheta: number = Math.PI * 0.25; // horizontal orbit angle
-  private directorPhi: number = Math.PI * 0.32; // vertical elevation angle
+  private directorTarget: THREE.Vector3 = new THREE.Vector3(0, 2.5, 0);
+  private directorRadius: number = 28;
+  private directorTheta: number = Math.PI * 0.2; // horizontal orbit angle
+  private directorPhi: number = Math.PI * 0.35; // vertical elevation angle
 
-  // Active Rig Camera (Viewfinder / PIP)
+  // Active Rig Camera (Viewfinder / POV)
   public activeRigCamera: THREE.PerspectiveCamera;
+
+  // Rig Observer Camera (tracks active rig from outside in Director mode)
+  public rigObserverCamera: THREE.PerspectiveCamera;
 
   // Multicamera rig 3D instances
   private rigMeshMap: Map<string, THREE.Group> = new Map();
+  private selectionRings: Map<string, THREE.Mesh> = new Map();
   private rigs: CameraRigState[] = [];
   private activeRigId: string | null = null;
+
+  // Floor raycast target plane
+  private groundRaycastMesh: THREE.Mesh;
 
   private isDragging: boolean = false;
   private isPanning: boolean = false;
   private prevMouseX: number = 0;
   private prevMouseY: number = 0;
+  private clickStartTime: number = 0;
+
+  // Staging placement mode
+  public clickToPlaceEnabled: boolean = true;
 
   private animFrameId: number | null = null;
   private clock: THREE.Clock = new THREE.Clock();
 
-  // Selection callback
+  // Callbacks
   public onSelectRig: ((rigId: string) => void) | null = null;
+  public onMoveRigPosition: ((rigId: string, newPos: [number, number, number]) => void) | null = null;
 
-  constructor(mainCanvas: HTMLCanvasElement, pipCanvas?: HTMLCanvasElement) {
-    this.mainCanvas = mainCanvas;
-    this.pipCanvas = pipCanvas || null;
+  constructor(arenaCanvas: HTMLCanvasElement, povCanvas?: HTMLCanvasElement) {
+    this.arenaCanvas = arenaCanvas;
+    this.povCanvas = povCanvas || null;
 
-    // Initialize WebGL Renderer
-    this.renderer = new THREE.WebGLRenderer({
-      canvas: this.mainCanvas,
+    // 1. Initialize Arena WebGL Renderer
+    this.arenaRenderer = new THREE.WebGLRenderer({
+      canvas: this.arenaCanvas,
       antialias: true,
       powerPreference: 'high-performance'
     });
-    this.renderer.setSize(mainCanvas.clientWidth, mainCanvas.clientHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.1;
+    this.arenaRenderer.setSize(arenaCanvas.clientWidth, arenaCanvas.clientHeight, false);
+    this.arenaRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.arenaRenderer.shadowMap.enabled = true;
+    this.arenaRenderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.arenaRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.arenaRenderer.toneMappingExposure = 1.15;
 
-    // Scene
+    // 2. Initialize POV Renderer if povCanvas provided
+    if (this.povCanvas) {
+      this.initPovRenderer(this.povCanvas);
+    }
+
+    // 3. Scene
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x05070b);
 
-    // Build Concert Stage Venue
+    // 4. Build Concert Stage Venue
     this.stageBuilder = new StageBuilder();
     this.scene.add(this.stageBuilder.group);
 
-    // Setup Director Camera
-    const aspect = mainCanvas.clientWidth / mainCanvas.clientHeight || 16 / 9;
+    // Raycasting invisible plane covering stage & arena
+    const groundGeo = new THREE.PlaneGeometry(120, 120);
+    const groundMat = new THREE.MeshBasicMaterial({ visible: false });
+    this.groundRaycastMesh = new THREE.Mesh(groundGeo, groundMat);
+    this.groundRaycastMesh.rotation.x = -Math.PI / 2;
+    this.groundRaycastMesh.position.y = 0;
+    this.scene.add(this.groundRaycastMesh);
+
+    // 5. Setup Cameras
+    const aspect = arenaCanvas.clientWidth / arenaCanvas.clientHeight || 16 / 9;
     this.directorCamera = new THREE.PerspectiveCamera(45, aspect, 0.1, 300);
     this.updateDirectorCameraPosition();
 
-    // Setup Active Rig Viewfinder Camera
+    // Active Rig Optical Camera
     this.activeRigCamera = new THREE.PerspectiveCamera(35, 16 / 9, 0.1, 300);
+
+    // Rig Observer Camera (tracks the rig closely from 4 meters away)
+    this.rigObserverCamera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 100);
 
     this.setupEventListeners();
     this.startLoop();
   }
 
-  public setPipCanvas(canvas: HTMLCanvasElement | null) {
-    this.pipCanvas = canvas;
+  public setPovCanvas(canvas: HTMLCanvasElement | null) {
+    if (this.povCanvas === canvas) return;
+    this.povCanvas = canvas;
+    if (this.povRenderer) {
+      this.povRenderer.dispose();
+      this.povRenderer = null;
+    }
+    if (this.povCanvas) {
+      this.initPovRenderer(this.povCanvas);
+    }
+  }
+
+  private initPovRenderer(canvas: HTMLCanvasElement) {
+    this.povRenderer = new THREE.WebGLRenderer({
+      canvas: canvas,
+      antialias: true,
+      powerPreference: 'high-performance'
+    });
+    this.povRenderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
+    this.povRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.povRenderer.shadowMap.enabled = true;
+    this.povRenderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.povRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.povRenderer.toneMappingExposure = 1.15;
   }
 
   public setStagePreset(preset: StagePreset) {
@@ -87,7 +138,6 @@ export class SceneManager {
     this.rigs = rigs;
     this.activeRigId = activeRigId;
 
-    // Track active ids to remove dead meshes
     const currentIds = new Set(rigs.map(r => r.id));
 
     // Remove old rigs
@@ -95,23 +145,43 @@ export class SceneManager {
       if (!currentIds.has(id)) {
         this.scene.remove(mesh);
         this.rigMeshMap.delete(id);
+        const selRing = this.selectionRings.get(id);
+        if (selRing) {
+          this.scene.remove(selRing);
+          this.selectionRings.delete(id);
+        }
       }
     }
 
     // Add or update rigs
     for (const rig of rigs) {
       let rigGroup = this.rigMeshMap.get(rig.id);
-      if (!rigGroup) {
-        rigGroup = CameraRigModels.createRigMesh(rig);
-        this.scene.add(rigGroup);
-        this.rigMeshMap.set(rig.id, rigGroup);
-      } else {
-        // Rebuild if body, mount, or tally changed
+      if (rigGroup) {
         this.scene.remove(rigGroup);
-        rigGroup = CameraRigModels.createRigMesh(rig);
-        this.scene.add(rigGroup);
-        this.rigMeshMap.set(rig.id, rigGroup);
       }
+      rigGroup = CameraRigModels.createRigMesh(rig);
+      this.scene.add(rigGroup);
+      this.rigMeshMap.set(rig.id, rigGroup);
+
+      // Floor Selection Halo Ring
+      let ring = this.selectionRings.get(rig.id);
+      if (!ring) {
+        const ringGeo = new THREE.RingGeometry(0.8, 0.95, 32);
+        ringGeo.rotateX(-Math.PI / 2);
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: rig.id === activeRigId ? 0x00f0ff : 0x475569,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: rig.id === activeRigId ? 0.9 : 0.3
+        });
+        ring = new THREE.Mesh(ringGeo, ringMat);
+        this.scene.add(ring);
+        this.selectionRings.set(rig.id, ring);
+      } else {
+        (ring.material as THREE.MeshBasicMaterial).color.set(rig.id === activeRigId ? 0x00f0ff : 0x475569);
+        (ring.material as THREE.MeshBasicMaterial).opacity = rig.id === activeRigId ? 0.9 : 0.3;
+      }
+      ring.position.set(rig.basePosition[0], 0.05, rig.basePosition[2]);
     }
   }
 
@@ -126,21 +196,17 @@ export class SceneManager {
   }
 
   private setupEventListeners() {
-    const canvas = this.mainCanvas;
+    const canvas = this.arenaCanvas;
 
     canvas.addEventListener('mousedown', (e: MouseEvent) => {
+      this.clickStartTime = Date.now();
       if (e.button === 0) {
-        // Left click: orbit
         this.isDragging = true;
       } else if (e.button === 2 || e.button === 1) {
-        // Right / Middle click: pan
         this.isPanning = true;
       }
       this.prevMouseX = e.clientX;
       this.prevMouseY = e.clientY;
-
-      // Raycast to check if clicking on a camera rig
-      this.handleRaycastSelect(e.clientX, e.clientY);
     });
 
     window.addEventListener('mousemove', (e: MouseEvent) => {
@@ -167,14 +233,20 @@ export class SceneManager {
       }
     });
 
-    window.addEventListener('mouseup', () => {
+    canvas.addEventListener('mouseup', (e: MouseEvent) => {
+      const clickDuration = Date.now() - this.clickStartTime;
       this.isDragging = false;
       this.isPanning = false;
+
+      // Only handle selection/placement if it was a quick click (< 250ms), not a drag
+      if (clickDuration < 250 && e.button === 0) {
+        this.handleClick(e.clientX, e.clientY, e.shiftKey);
+      }
     });
 
     canvas.addEventListener('wheel', (e: WheelEvent) => {
       e.preventDefault();
-      this.directorRadius = Math.max(3, Math.min(120, this.directorRadius + e.deltaY * 0.03));
+      this.directorRadius = Math.max(3, Math.min(140, this.directorRadius + e.deltaY * 0.03));
       this.updateDirectorCameraPosition();
     }, { passive: false });
 
@@ -184,23 +256,24 @@ export class SceneManager {
     const resizeObserver = new ResizeObserver(() => {
       this.handleResize();
     });
-    resizeObserver.observe(this.mainCanvas);
+    resizeObserver.observe(this.arenaCanvas);
   }
 
-  private handleRaycastSelect(clientX: number, clientY: number) {
-    const rect = this.mainCanvas.getBoundingClientRect();
+  private handleClick(clientX: number, clientY: number, isShiftHeld: boolean) {
+    const rect = this.arenaCanvas.getBoundingClientRect();
     const x = ((clientX - rect.left) / rect.width) * 2 - 1;
     const y = -((clientY - rect.top) / rect.height) * 2 + 1;
 
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(new THREE.Vector2(x, y), this.directorCamera);
 
-    const checkObjects: THREE.Object3D[] = [];
-    this.rigMeshMap.forEach(group => checkObjects.push(group));
+    // 1. First check if clicked on any Camera Rig
+    const rigGroups: THREE.Object3D[] = [];
+    this.rigMeshMap.forEach(group => rigGroups.push(group));
 
-    const intersects = raycaster.intersectObjects(checkObjects, true);
-    if (intersects.length > 0) {
-      let topObj: THREE.Object3D | null = intersects[0].object;
+    const rigIntersects = raycaster.intersectObjects(rigGroups, true);
+    if (rigIntersects.length > 0) {
+      let topObj: THREE.Object3D | null = rigIntersects[0].object;
       while (topObj && !topObj.name.startsWith('Rig_') && topObj.parent) {
         topObj = topObj.parent;
       }
@@ -209,6 +282,19 @@ export class SceneManager {
         if (this.onSelectRig) {
           this.onSelectRig(rigId);
         }
+        return;
+      }
+    }
+
+    // 2. If click-to-place enabled or Shift is held, raycast to stage floor/catwalk
+    if (this.clickToPlaceEnabled || isShiftHeld) {
+      const stageIntersects = raycaster.intersectObject(this.groundRaycastMesh, false);
+      if (stageIntersects.length > 0 && this.activeRigId && this.onMoveRigPosition) {
+        const p = stageIntersects[0].point;
+        // Keep within reasonable arena bounds (-35 to +35 x, -15 to +40 z)
+        const clampedX = Math.max(-35, Math.min(35, p.x));
+        const clampedZ = Math.max(-18, Math.min(45, p.z));
+        this.onMoveRigPosition(this.activeRigId, [clampedX, 0, clampedZ]);
       }
     }
   }
@@ -250,17 +336,24 @@ export class SceneManager {
   }
 
   public handleResize() {
-    const width = this.mainCanvas.clientWidth;
-    const height = this.mainCanvas.clientHeight;
-    if (width === 0 || height === 0) return;
+    // Resize Arena Renderer
+    const aW = this.arenaCanvas.clientWidth;
+    const aH = this.arenaCanvas.clientHeight;
+    if (aW > 0 && aH > 0) {
+      this.arenaRenderer.setSize(aW, aH, false);
+      this.directorCamera.aspect = aW / aH;
+      this.directorCamera.updateProjectionMatrix();
+    }
 
-    this.renderer.setSize(width, height, false);
-    this.directorCamera.aspect = width / height;
-    this.directorCamera.updateProjectionMatrix();
-
-    if (this.pipCanvas) {
-      this.activeRigCamera.aspect = this.pipCanvas.clientWidth / this.pipCanvas.clientHeight || 16 / 9;
-      this.activeRigCamera.updateProjectionMatrix();
+    // Resize POV Renderer
+    if (this.povCanvas && this.povRenderer) {
+      const pW = this.povCanvas.clientWidth;
+      const pH = this.povCanvas.clientHeight;
+      if (pW > 0 && pH > 0) {
+        this.povRenderer.setSize(pW, pH, false);
+        this.activeRigCamera.aspect = pW / pH;
+        this.activeRigCamera.updateProjectionMatrix();
+      }
     }
   }
 
@@ -280,24 +373,21 @@ export class SceneManager {
 
     // 2. Update Kinematics for all camera rigs
     let activeRigState: CameraRigState | null = null;
+    let activeRigWorldPos = new THREE.Vector3();
 
     for (const rig of this.rigs) {
       const transform = computeRigWorldTransform(rig, time);
       const group = this.rigMeshMap.get(rig.id);
 
       if (group) {
-        // Base coordinate
         group.position.set(rig.basePosition[0], rig.basePosition[1], rig.basePosition[2]);
 
-        // Find camera assembly sub-mesh inside rig
         const camAssembly = group.getObjectByName(`CameraAssembly_${rig.id}`);
         if (camAssembly) {
-          // Set relative to base
           camAssembly.position.copy(transform.position).sub(group.position);
           camAssembly.rotation.copy(transform.rotation);
         }
 
-        // Animate slider carriage if slider
         if (rig.mountType === 'SLIDER') {
           const carriage = group.getObjectByName(`Carriage_${rig.id}`);
           if (carriage) {
@@ -310,7 +400,6 @@ export class SceneManager {
           }
         }
 
-        // Animate crane arm if crane
         if (rig.mountType === 'CRANE') {
           const armGroup = group.getObjectByName(`CraneArm_${rig.id}`);
           if (armGroup) {
@@ -320,12 +409,19 @@ export class SceneManager {
         }
       }
 
+      // Update selection ring position
+      const ring = this.selectionRings.get(rig.id);
+      if (ring) {
+        ring.position.set(rig.basePosition[0], 0.05, rig.basePosition[2]);
+      }
+
       if (rig.id === this.activeRigId) {
         activeRigState = rig;
+        activeRigWorldPos.copy(transform.position);
       }
     }
 
-    // 3. Update Active Camera Lens FOV & Position
+    // 3. Update Active Camera Optical FOV & Position
     if (activeRigState) {
       const bodySpec = CAMERA_BODIES[activeRigState.bodyId];
       const vFov = calculateVerticalFov(activeRigState.focalLength, bodySpec.sensorHeightMm, activeRigState.sensorCrop);
@@ -336,25 +432,28 @@ export class SceneManager {
       const activeTransform = computeRigWorldTransform(activeRigState, time);
       this.activeRigCamera.position.copy(activeTransform.position);
       this.activeRigCamera.rotation.copy(activeTransform.rotation);
+
+      // Rig Observer Camera frames the rig from behind/side
+      const observerOffset = new THREE.Vector3(2.5, 1.8, 3.5);
+      this.rigObserverCamera.position.copy(activeTransform.position).add(observerOffset);
+      this.rigObserverCamera.lookAt(activeTransform.position);
     }
 
-    // 4. Render Main Arena View (Director Perspective)
-    this.renderer.render(this.scene, this.directorCamera);
+    // 4. Render Main Arena View (Director 3D Perspective)
+    this.arenaRenderer.render(this.scene, this.directorCamera);
 
-    // 5. Render PIP Viewfinder if PIP canvas is active
-    if (this.pipCanvas && activeRigState) {
-      const pipCtx = this.pipCanvas.getContext('2d');
-      if (pipCtx) {
-        const pipW = this.pipCanvas.width;
-        const pipH = this.pipCanvas.height;
+    // 5. Render Camera Optical POV to dedicated POV Renderer if active
+    if (this.povRenderer && this.povCanvas && activeRigState) {
+      // Hide active camera's own rig mesh so it doesn't obstruct its own lens
+      const activeGroup = this.rigMeshMap.get(activeRigState.id);
+      if (activeGroup) {
+        activeGroup.visible = false;
+      }
 
-        // Temporarily render active camera using WebGL scissor to copy into PIP canvas
-        this.renderer.setViewport(0, 0, pipW, pipH);
-        this.renderer.render(this.scene, this.activeRigCamera);
-        pipCtx.drawImage(this.mainCanvas, 0, 0, pipW, pipH, 0, 0, pipW, pipH);
+      this.povRenderer.render(this.scene, this.activeRigCamera);
 
-        // Restore main viewport
-        this.renderer.setViewport(0, 0, this.mainCanvas.width, this.mainCanvas.height);
+      if (activeGroup) {
+        activeGroup.visible = true;
       }
     }
   }
@@ -363,6 +462,9 @@ export class SceneManager {
     if (this.animFrameId !== null) {
       cancelAnimationFrame(this.animFrameId);
     }
-    this.renderer.dispose();
+    this.arenaRenderer.dispose();
+    if (this.povRenderer) {
+      this.povRenderer.dispose();
+    }
   }
 }

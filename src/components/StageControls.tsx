@@ -99,3 +99,4 @@ export const StageControls: React.FC<StageControlsProps> = ({
     </div>
   );
 };
+
