@@ -1,21 +1,19 @@
 import React from 'react';
 import { CameraRigState, CameraBodyId, MountType } from '../types';
 import { CAMERA_BODIES, MOUNT_TYPES, LENSES } from '../data/cameras';
+import { StageBuilder } from '../scene/StageBuilder';
 import {
   MapPin,
   Move,
   Camera,
-  Layers,
   Sliders,
-  CheckCircle2,
   Sparkles,
-  ArrowRight,
-  Maximize,
-  Compass
+  ArrowRight
 } from 'lucide-react';
 
 interface StagingControlsProps {
   activeRig: CameraRigState;
+  hoverCoord: [number, number, number] | null;
   onUpdateRig: (updates: Partial<CameraRigState>) => void;
   onUpdateBasePosition: (newPos: [number, number, number]) => void;
   clickToPlaceEnabled: boolean;
@@ -24,40 +22,42 @@ interface StagingControlsProps {
 }
 
 const STAGE_HOTSPOTS = [
-  { name: 'FOH Desk', pos: [0, 0, 32] as [number, number, number], desc: 'Front of House' },
-  { name: 'Catwalk Tip', pos: [0, 0, 13] as [number, number, number], desc: 'Runway B-Stage' },
-  { name: 'Pit Center', pos: [0, 0, 16] as [number, number, number], desc: 'Stage Apron' },
-  { name: 'Stage Left Crane', pos: [-14, 0, 8] as [number, number, number], desc: 'High Reach Jib' },
-  { name: 'Stage Right Crane', pos: [14, 0, 8] as [number, number, number], desc: 'High Reach Jib' },
-  { name: 'Drum Riser', pos: [-3, 1.8, -6] as [number, number, number], desc: 'Upstage Close' },
-  { name: 'Guitar Stage Left', pos: [-6, 1.8, -2] as [number, number, number], desc: 'Catwalk Side' },
-  { name: 'Arena Skycam', pos: [0, 15, 0] as [number, number, number], desc: 'Aerial Cables' }
+  { name: 'FOH Control', pos: [0, 0.6, 35.0] as [number, number, number], desc: 'Front of House' },
+  { name: 'Catwalk Tip', pos: [0, 1.8, 25.0] as [number, number, number], desc: 'Pasarela Frente' },
+  { name: 'Catwalk Mid', pos: [1.6, 1.8, 14.0] as [number, number, number], desc: 'Pasarela Media' },
+  { name: 'Main Stage Center', pos: [-3.5, 1.8, 2.5] as [number, number, number], desc: 'Tarima Principal' },
+  { name: 'Upper Band Riser', pos: [-3.2, 3.2, -5.0] as [number, number, number], desc: '2do Nivel Batería' },
+  { name: 'Stage Left Crane', pos: [-15.0, 0.0, 10.0] as [number, number, number], desc: 'Foso Izquierdo' },
+  { name: 'Stage Right Crane', pos: [15.0, 0.0, 10.0] as [number, number, number], desc: 'Foso Derecho' },
+  { name: 'Backstage Corridor', pos: [0, 0.0, -16.5] as [number, number, number], desc: 'Detrás del Escenario' }
 ];
 
 export const StagingControls: React.FC<StagingControlsProps> = ({
   activeRig,
+  hoverCoord,
   onUpdateRig,
   onUpdateBasePosition,
   clickToPlaceEnabled,
   onToggleClickToPlace,
   onProceedToDirectorMode
 }) => {
-  const currentBody = CAMERA_BODIES[activeRig.bodyId];
-  const currentMount = MOUNT_TYPES[activeRig.mountType];
-  const currentLens = LENSES.find(l => l.id === activeRig.lensId) || LENSES[0];
+  const handleXZSliderChange = (newX: number, newZ: number) => {
+    const autoY = StageBuilder.getSurfaceElevationAt(newX, newZ);
+    onUpdateBasePosition([newX, autoY, newZ]);
+  };
 
   return (
-    <div className="bg-neutral-900/90 backdrop-blur-md rounded-xl border border-neutral-800 p-4 flex flex-col gap-4 text-xs font-sans text-neutral-200 shadow-xl max-h-[calc(100vh-8.5rem)] overflow-y-auto">
+    <div className="bg-neutral-900/90 backdrop-blur-md rounded-xl border border-neutral-800 p-4 flex flex-col gap-3.5 text-xs font-sans text-neutral-200 shadow-xl max-h-[calc(100vh-8.5rem)] overflow-y-auto">
       {/* HEADER */}
-      <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+      <div className="flex items-center justify-between pb-2.5 border-b border-neutral-800">
         <div className="flex items-center gap-2.5">
           <div className="p-2 rounded-lg bg-cyan-600/20 text-cyan-400 border border-cyan-500/30">
             <MapPin className="w-4 h-4" />
           </div>
           <div>
-            <h3 className="font-bold text-sm text-neutral-100 tracking-wide">3D STAGE RIG POSITIONING</h3>
+            <h3 className="font-bold text-sm text-neutral-100 tracking-wide">POSICIONAR EN ESCENARIO 3D</h3>
             <p className="text-[11px] text-neutral-400 font-mono">
-              Editing: <span className="text-cyan-400 font-semibold">{activeRig.name}</span>
+              Activa: <span className="text-cyan-400 font-semibold">{activeRig.name}</span>
             </p>
           </div>
         </div>
@@ -67,7 +67,7 @@ export const StagingControls: React.FC<StagingControlsProps> = ({
           onClick={onProceedToDirectorMode}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold text-xs shadow-md shadow-cyan-950 transition-all cursor-pointer"
         >
-          <span>Director Mode</span>
+          <span>Ver POV</span>
           <ArrowRight className="w-3.5 h-3.5" />
         </button>
       </div>
@@ -77,97 +77,104 @@ export const StagingControls: React.FC<StagingControlsProps> = ({
         <div className="flex items-center justify-between">
           <span className="font-bold text-neutral-200 flex items-center gap-1.5">
             <Move className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Interactive Stage Placement</span>
+            <span>Colocación Interactiva 3D</span>
           </span>
           <button
             onClick={onToggleClickToPlace}
-            className={`px-2.5 py-1 rounded-md text-[11px] font-semibold border transition-colors ${
+            className={`px-2.5 py-1 rounded-md text-[11px] font-semibold border transition-colors cursor-pointer ${
               clickToPlaceEnabled
                 ? 'bg-cyan-600 text-white border-cyan-500 shadow-sm'
                 : 'bg-neutral-800 text-neutral-400 border-neutral-700 hover:text-neutral-200'
             }`}
           >
-            {clickToPlaceEnabled ? 'Click-to-Place: ON' : 'Click-to-Place: OFF'}
+            {clickToPlaceEnabled ? 'Click-to-Place: ACTIVO' : 'Click-to-Place: OFF'}
           </button>
         </div>
 
         {clickToPlaceEnabled && (
-          <div className="p-2 rounded bg-cyan-950/40 border border-cyan-800/40 text-[11px] text-cyan-200 leading-relaxed font-mono">
-            ℹ️ <span className="font-bold">Click anywhere on the 3D Stage deck, catwalk, or arena floor</span> to immediately relocate this camera rig!
+          <div className="p-2 rounded bg-cyan-950/40 border border-cyan-800/40 text-[11px] text-cyan-200 leading-relaxed font-mono flex items-center justify-between">
+            <span>Haz clic en cualquier piso, tarima, pasarela o backstage para mover la cámara allí.</span>
+            {hoverCoord && (
+              <span className="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-bold shrink-0 ml-2">
+                [{hoverCoord[0]}m, {hoverCoord[1]}m, {hoverCoord[2]}m]
+              </span>
+            )}
           </div>
         )}
 
-        {/* 3D Coordinate Sliders */}
-        <div className="grid grid-cols-2 gap-3 pt-1">
+        {/* 3D Coordinate Sliders (X, Z, Y) */}
+        <div className="grid grid-cols-3 gap-2.5 pt-1">
           {/* X (Left / Right) */}
           <div className="flex flex-col gap-1">
             <div className="flex justify-between font-mono text-[10px]">
-              <span className="text-neutral-400">STAGE X (Left/Right)</span>
+              <span className="text-neutral-400">EJE X (Lados)</span>
               <span className="text-cyan-400 font-bold">{activeRig.basePosition[0].toFixed(1)}m</span>
             </div>
             <input
               type="range"
-              min="-30"
-              max="30"
+              min="-32"
+              max="32"
               step="0.5"
               value={activeRig.basePosition[0]}
-              onChange={e =>
-                onUpdateBasePosition([
-                  parseFloat(e.target.value),
-                  activeRig.basePosition[1],
-                  activeRig.basePosition[2]
-                ])
-              }
+              onChange={e => handleXZSliderChange(parseFloat(e.target.value), activeRig.basePosition[2])}
               className="w-full accent-cyan-500 h-1.5 bg-neutral-800 rounded cursor-pointer"
             />
-            <div className="flex justify-between text-[9px] text-neutral-500 font-mono">
-              <span>Stage Left</span>
-              <span>Center</span>
-              <span>Stage Right</span>
-            </div>
           </div>
 
-          {/* Z (Upstage / Front) */}
+          {/* Z (Backstage / Stage / Catwalk / FOH) */}
           <div className="flex flex-col gap-1">
             <div className="flex justify-between font-mono text-[10px]">
-              <span className="text-neutral-400">STAGE Z (Depth/Arena)</span>
+              <span className="text-neutral-400">EJE Z (Fondo)</span>
               <span className="text-cyan-400 font-bold">{activeRig.basePosition[2].toFixed(1)}m</span>
             </div>
             <input
               type="range"
-              min="-15"
-              max="40"
+              min="-22"
+              max="42"
               step="0.5"
               value={activeRig.basePosition[2]}
+              onChange={e => handleXZSliderChange(activeRig.basePosition[0], parseFloat(e.target.value))}
+              className="w-full accent-cyan-500 h-1.5 bg-neutral-800 rounded cursor-pointer"
+            />
+          </div>
+
+          {/* Y (Floor Elevation) */}
+          <div className="flex flex-col gap-1">
+            <div className="flex justify-between font-mono text-[10px]">
+              <span className="text-neutral-400">NIVEL Y (Piso)</span>
+              <span className="text-amber-400 font-bold">{activeRig.basePosition[1].toFixed(1)}m</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="14"
+              step="0.2"
+              value={activeRig.basePosition[1]}
               onChange={e =>
                 onUpdateBasePosition([
                   activeRig.basePosition[0],
-                  activeRig.basePosition[1],
-                  parseFloat(e.target.value)
+                  parseFloat(e.target.value),
+                  activeRig.basePosition[2]
                 ])
               }
-              className="w-full accent-cyan-500 h-1.5 bg-neutral-800 rounded cursor-pointer"
+              className="w-full accent-amber-500 h-1.5 bg-neutral-800 rounded cursor-pointer"
             />
-            <div className="flex justify-between text-[9px] text-neutral-500 font-mono">
-              <span>Upstage Back</span>
-              <span>Catwalk Tip</span>
-              <span>FOH Stadium</span>
-            </div>
           </div>
         </div>
 
         {/* Quick Hotspot Anchors */}
         <div className="flex flex-col gap-1.5 pt-2 border-t border-neutral-800/60">
-          <span className="text-neutral-400 text-[10px] font-mono">QUICK STAGE HOTSPOTS:</span>
+          <span className="text-neutral-400 text-[10px] font-mono">UBICACIONES RÁPIDAS DEL ESCENARIO 3D:</span>
           <div className="grid grid-cols-4 gap-1.5">
             {STAGE_HOTSPOTS.map(h => (
               <button
                 key={h.name}
                 onClick={() => onUpdateBasePosition(h.pos)}
-                className="px-1.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 border border-neutral-700/60 text-[10px] text-neutral-200 text-left transition-colors"
+                className="px-1.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 border border-neutral-700/60 text-[10px] text-neutral-200 text-left transition-colors cursor-pointer"
                 title={`${h.name} (${h.desc})`}
               >
                 <div className="font-semibold truncate">{h.name}</div>
+                <div className="text-[9px] text-neutral-400 truncate">{h.desc}</div>
               </button>
             ))}
           </div>
@@ -175,10 +182,10 @@ export const StagingControls: React.FC<StagingControlsProps> = ({
       </div>
 
       {/* SECTION 2: CAMERA BODY SELECTION */}
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-1.5">
         <label className="text-xs font-bold text-neutral-200 flex items-center gap-1.5">
           <Camera className="w-3.5 h-3.5 text-cyan-400" />
-          <span>Professional Cinema Camera Body</span>
+          <span>1. Elige la Cámara Profesional (Sony Cinema)</span>
         </label>
         <div className="grid grid-cols-2 gap-2">
           {(Object.keys(CAMERA_BODIES) as CameraBodyId[]).map(bId => {
@@ -188,19 +195,18 @@ export const StagingControls: React.FC<StagingControlsProps> = ({
               <div
                 key={bId}
                 onClick={() => onUpdateRig({ bodyId: bId })}
-                className={`p-2 rounded-lg border cursor-pointer flex items-center gap-2.5 transition-all ${
+                className={`p-2 rounded-lg border cursor-pointer flex items-center gap-2 transition-all ${
                   isCur
                     ? 'bg-neutral-800 border-cyan-400 ring-1 ring-cyan-500/50 shadow-md'
                     : 'bg-neutral-950/50 border-neutral-800 hover:border-neutral-700'
                 }`}
               >
-                <div className="w-12 h-12 bg-neutral-900 rounded p-1 flex items-center justify-center shrink-0">
+                <div className="w-11 h-11 bg-neutral-900 rounded p-1 flex items-center justify-center shrink-0">
                   <img src={b.image} alt={b.name} className="max-w-full max-h-full object-contain" />
                 </div>
                 <div className="flex flex-col min-w-0">
                   <span className="font-bold text-xs text-white truncate">{b.name}</span>
                   <span className="text-[10px] text-cyan-400 font-mono">{b.resolution}</span>
-                  <span className="text-[9px] text-neutral-400 truncate">{b.sensor}</span>
                 </div>
               </div>
             );
@@ -209,12 +215,12 @@ export const StagingControls: React.FC<StagingControlsProps> = ({
       </div>
 
       {/* SECTION 3: MOUNT & SUPPORT RIG SELECTION */}
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-1.5">
         <label className="text-xs font-bold text-neutral-200 flex items-center gap-1.5">
           <Sliders className="w-3.5 h-3.5 text-indigo-400" />
-          <span>Mount & Movement Support Rig</span>
+          <span>2. Elige el Rig / Soporte de Movimiento</span>
         </label>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-3 gap-1.5">
           {(Object.keys(MOUNT_TYPES) as MountType[]).map(mType => {
             const m = MOUNT_TYPES[mType];
             const isCur = activeRig.mountType === mType;
@@ -237,10 +243,10 @@ export const StagingControls: React.FC<StagingControlsProps> = ({
       </div>
 
       {/* SECTION 4: LENS SELECTION */}
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-1.5">
         <label className="text-xs font-bold text-neutral-200 flex items-center gap-1.5">
           <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-          <span>Cinema Optics & Lens</span>
+          <span>3. Elige el Lente de Cine</span>
         </label>
         <select
           value={activeRig.lensId}
@@ -265,12 +271,12 @@ export const StagingControls: React.FC<StagingControlsProps> = ({
       </div>
 
       {/* FOOTER CTA: DIRECT ENTRY TO DIRECTOR MODE */}
-      <div className="pt-2 border-t border-neutral-800 flex justify-end">
+      <div className="pt-1 border-t border-neutral-800 flex justify-end">
         <button
           onClick={onProceedToDirectorMode}
           className="w-full py-2.5 rounded-lg bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold text-xs shadow-lg flex items-center justify-center gap-2 cursor-pointer transition-all"
         >
-          <span>Open Director Mode (Control Rig & Observe POV)</span>
+          <span>Ir a Modo Director (Operar Rig y Ver POV)</span>
           <ArrowRight className="w-4 h-4" />
         </button>
       </div>

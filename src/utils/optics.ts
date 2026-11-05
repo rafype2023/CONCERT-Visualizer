@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { CameraRigState } from '../types';
-import { CAMERA_BODIES } from '../data/cameras';
 
 /**
  * Calculates Vertical Field of View (FOV) in degrees for Three.js PerspectiveCamera
@@ -36,8 +35,8 @@ export function computeRigWorldTransform(rig: CameraRigState, timeSec: number = 
   const camPos = new THREE.Vector3();
   const camRot = new THREE.Euler(0, 0, 0, 'YXZ');
 
-  // Stage center performer coordinate (Singer podium mark)
-  const stageTarget = new THREE.Vector3(0, 2.0, 0);
+  // Stage center performer coordinate (Center Stage Vocalist chest/head height on 1.8m deck)
+  const stageTarget = new THREE.Vector3(0, 3.3, 2.2);
 
   switch (mountType) {
     case 'TRIPOD': {
@@ -55,17 +54,16 @@ export function computeRigWorldTransform(rig: CameraRigState, timeSec: number = 
     case 'SLIDER': {
       let t = movement.sliderPosition;
       if (movement.sliderPingPong) {
-        // Continuous ping-pong animation based on speed
         const cycle = (timeSec * movement.sliderSpeed * 0.5) % 2;
         t = cycle > 1 ? 2 - cycle : cycle;
       }
-      const halfLen = movement.sliderLength / 2;
       const offsetDist = (t - 0.5) * movement.sliderLength;
       const sliderRad = THREE.MathUtils.degToRad(movement.sliderAngle);
 
       camPos.copy(base);
-      camPos.x += Math.sin(sliderRad) * offsetDist;
-      camPos.z += Math.cos(sliderRad) * offsetDist;
+      // Local rail is along X-axis rotated by sliderAngle around Y
+      camPos.x += Math.cos(sliderRad) * offsetDist;
+      camPos.z -= Math.sin(sliderRad) * offsetDist;
       camPos.y += movement.height;
 
       camRot.set(
@@ -86,15 +84,15 @@ export function computeRigWorldTransform(rig: CameraRigState, timeSec: number = 
 
       camPos.copy(base);
       if (movement.dollyTrackType === 'RUNWAY_CURVE') {
-        // Catwalk horseshoe arc in front of stage
-        const radius = 12;
-        const angle = THREE.MathUtils.lerp(-Math.PI * 0.45, Math.PI * 0.45, t);
-        camPos.x = Math.sin(angle) * radius;
-        camPos.z = 10 + Math.cos(angle) * (radius * 0.5);
+        // Curved arc relative to base position
+        const radius = 8.0;
+        const angle = THREE.MathUtils.lerp(-Math.PI * 0.4, Math.PI * 0.4, t);
+        camPos.x = base.x + Math.sin(angle) * radius;
+        camPos.z = base.z + (Math.cos(angle) - 1) * (radius * 0.6);
       } else {
-        // Straight pit track traverse
-        const trackLen = 14;
-        camPos.x = base.x + (t - 0.5) * trackLen;
+        // Straight track traverse along Z-axis (push-in / pull-out) or X-axis
+        const trackLen = 12.0;
+        camPos.z = base.z + (t - 0.5) * trackLen;
       }
       camPos.y += movement.height;
 
@@ -113,7 +111,7 @@ export function computeRigWorldTransform(rig: CameraRigState, timeSec: number = 
       const armLen = movement.craneArmLength;
 
       // Jib pivot height
-      const pivotY = base.y + 2.0;
+      const pivotY = base.y + 2.4;
 
       // Boom tip position
       const reach = Math.cos(elevRad) * armLen;
@@ -124,9 +122,9 @@ export function computeRigWorldTransform(rig: CameraRigState, timeSec: number = 
       );
 
       // Remote Head Pan/Tilt/Roll relative to jib swing
-      const totalPan = movement.craneBaseAngle + movement.craneHeadPan;
-      const totalTilt = movement.craneHeadTilt;
-      const totalRoll = movement.craneHeadRoll;
+      const totalPan = movement.craneBaseAngle + movement.craneHeadPan + movement.pan;
+      const totalTilt = movement.craneHeadTilt + movement.tilt;
+      const totalRoll = movement.craneHeadRoll + movement.roll;
 
       camRot.set(
         THREE.MathUtils.degToRad(totalTilt),
@@ -144,14 +142,14 @@ export function computeRigWorldTransform(rig: CameraRigState, timeSec: number = 
         t = cycle > 1 ? 2 - cycle : cycle;
       }
 
-      // Arena aerial cable anchors (high in the arena)
-      const spanA = new THREE.Vector3(-25, 16, -20);
-      const spanB = new THREE.Vector3(25, 14, 25);
+      // Aerial cable span centered at basePosition
+      const cableHeight = Math.max(10, base.y + 15);
+      const spanA = new THREE.Vector3(base.x - 24, cableHeight, base.z - 12);
+      const spanB = new THREE.Vector3(base.x + 24, cableHeight, base.z + 12);
 
       camPos.lerpVectors(spanA, spanB, t);
-      // Realistic catenary sag + winch descent
-      const sag = Math.sin(t * Math.PI) * 1.5;
-      camPos.y -= (movement.cableElevationDrop + sag);
+      const sag = Math.sin(t * Math.PI) * 1.2;
+      camPos.y -= movement.cableElevationDrop + sag;
 
       camRot.set(
         THREE.MathUtils.degToRad(movement.tilt),
@@ -166,7 +164,6 @@ export function computeRigWorldTransform(rig: CameraRigState, timeSec: number = 
       camPos.copy(base);
       camPos.y += movement.height;
 
-      // Organic walking / sway micro-vibrations
       if (movement.handheldSway) {
         const swayIntensity = movement.handheldSwayIntensity;
         const swayX = Math.sin(timeSec * 2.2) * 0.04 * swayIntensity;
@@ -203,6 +200,9 @@ export function computeRigWorldTransform(rig: CameraRigState, timeSec: number = 
     const dummy = new THREE.Object3D();
     dummy.position.copy(camPos);
     dummy.lookAt(stageTarget);
+    // Apply manual pan/tilt offsets on top of target lock so the operator can still fine-tune framing!
+    dummy.rotateY(THREE.MathUtils.degToRad(movement.pan * 0.25));
+    dummy.rotateX(THREE.MathUtils.degToRad(movement.tilt * 0.25));
     camRot.copy(dummy.rotation);
   }
 
@@ -214,4 +214,3 @@ export function computeRigWorldTransform(rig: CameraRigState, timeSec: number = 
     lookAtDirection: forward
   };
 }
-
