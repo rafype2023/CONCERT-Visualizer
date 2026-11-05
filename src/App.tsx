@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { CameraRigState, StagePreset, AspectRatioMask, RigMovementParams, AppMode } from './types';
+import { CameraRigState, StagePreset, AspectRatioMask, RigMovementParams, AppMode, ProjectSettings } from './types';
 import { STAGE_PRESETS, CAMERA_BODIES } from './data/cameras';
 import { SceneManager } from './scene/SceneManager';
 import { StageBuilder } from './scene/StageBuilder';
@@ -9,6 +9,13 @@ import { StagingControls } from './components/StagingControls';
 import { CameraManager } from './components/CameraManager';
 import { StageControls } from './components/StageControls';
 import { HelpModal } from './components/HelpModal';
+import { ProjectSettingsModal } from './components/ProjectSettingsModal';
+import {
+  exportProjectToJson,
+  importProjectFromJson,
+  saveToLocalStorage,
+  loadFromLocalStorage
+} from './utils/projectStorage';
 import {
   Video,
   Layers,
@@ -18,7 +25,13 @@ import {
   Film,
   Tv,
   ArrowRight,
-  HelpCircle
+  HelpCircle,
+  Download,
+  Upload,
+  FileJson,
+  CheckCircle2,
+  AlertTriangle,
+  Info
 } from 'lucide-react';
 
 const INITIAL_RIGS: CameraRigState[] = [
@@ -292,13 +305,27 @@ export default function App() {
   const arenaCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const povCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneManagerRef = useRef<SceneManager | null>(null);
+  const quickFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // App Modes: STAGING (3D setup) | DIRECTOR (Live Rig + POV) | MULTIVIEW (Live Monitor Wall)
   const [mode, setMode] = useState<AppMode>('STAGING');
 
-  const [rigs, setRigs] = useState<CameraRigState[]>(INITIAL_RIGS);
-  const [activeRigId, setActiveRigId] = useState<string>('cam-1');
-  const [currentStagePreset, setCurrentStagePreset] = useState<StagePreset>(STAGE_PRESETS[0]);
+  // Check initial state from local storage or defaults
+  const initialSaved = useRef(loadFromLocalStorage()).current;
+
+  const [rigs, setRigs] = useState<CameraRigState[]>(
+    initialSaved?.rigs && initialSaved.rigs.length > 0 ? initialSaved.rigs : INITIAL_RIGS
+  );
+  const [activeRigId, setActiveRigId] = useState<string>(
+    initialSaved?.activeRigId || 'cam-1'
+  );
+  const [currentStagePreset, setCurrentStagePreset] = useState<StagePreset>(() => {
+    if (initialSaved?.stagePresetId) {
+      const found = STAGE_PRESETS.find(p => p.id === initialSaved.stagePresetId);
+      if (found) return found;
+    }
+    return STAGE_PRESETS[0];
+  });
 
   // Staging sidebar active tab
   const [stagingTab, setStagingTab] = useState<'POSITION' | 'ALL_CAMERAS' | 'STAGE_THEMES'>('POSITION');
@@ -306,17 +333,35 @@ export default function App() {
   const [hoverCoord, setHoverCoord] = useState<[number, number, number] | null>(null);
 
   // Director mode layout
-  const [directorLayout, setDirectorLayout] = useState<'SPLIT' | 'POV_DOMINANT' | 'STAGE_DOMINANT'>('SPLIT');
+  const [directorLayout, setDirectorLayout] = useState<'SPLIT' | 'POV_DOMINANT' | 'STAGE_DOMINANT'>(
+    initialSaved?.directorLayout || 'SPLIT'
+  );
 
-  // Help Modal state
+  // Modals state
   const [isHelpOpen, setIsHelpOpen] = useState<boolean>(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [projectName, setProjectName] = useState<string>(initialSaved?.projectName || 'Concert-Production-Previz');
 
   // Viewfinder overlays
-  const [aspectMask, setAspectMask] = useState<AspectRatioMask>('16:9');
-  const [showGuides, setShowGuides] = useState<boolean>(true);
-  const [showSafeAreas, setShowSafeAreas] = useState<boolean>(true);
+  const [aspectMask, setAspectMask] = useState<AspectRatioMask>(initialSaved?.aspectMask || '16:9');
+  const [showGuides, setShowGuides] = useState<boolean>(
+    initialSaved?.showGuides !== undefined ? initialSaved.showGuides : true
+  );
+  const [showSafeAreas, setShowSafeAreas] = useState<boolean>(
+    initialSaved?.showSafeAreas !== undefined ? initialSaved.showSafeAreas : true
+  );
+
+  // Toast feedback notifications
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
 
   const activeRig = rigs.find(r => r.id === activeRigId) || rigs[0];
+
+  const handleNotify = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => {
+      setToast(prev => (prev?.message === message ? null : prev));
+    }, 4500);
+  };
 
   // Initialize SceneManager once on persistent canvases
   useEffect(() => {
@@ -361,12 +406,28 @@ export default function App() {
     mgr.isMultiviewActive = mode === 'MULTIVIEW';
     mgr.setPovCanvas(povCanvasRef.current);
 
-    // Allow layout flexbox transition to settle then resize
     const timer = setTimeout(() => {
       mgr.handleResize();
     }, 20);
     return () => clearTimeout(timer);
   }, [mode, directorLayout, clickToPlaceEnabled]);
+
+  // Auto-save settings to local storage when state changes
+  useEffect(() => {
+    const settings: ProjectSettings = {
+      version: '1.0.0',
+      projectName,
+      savedAt: new Date().toISOString(),
+      stagePresetId: currentStagePreset.id,
+      activeRigId,
+      directorLayout,
+      aspectMask,
+      showGuides,
+      showSafeAreas,
+      rigs
+    };
+    saveToLocalStorage(settings);
+  }, [rigs, activeRigId, currentStagePreset, directorLayout, aspectMask, showGuides, showSafeAreas, projectName]);
 
   // Stage Preset change
   const handleSelectPreset = (preset: StagePreset) => {
@@ -414,7 +475,7 @@ export default function App() {
     );
   };
 
-  // Add Rig (auto-snaps to correct architectural elevation)
+  // Add Rig
   const handleAddRig = (newRig: CameraRigState) => {
     const surfaceY = StageBuilder.getSurfaceElevationAt(newRig.basePosition[0], newRig.basePosition[2]);
     const adjustedRig: CameraRigState = {
@@ -434,6 +495,66 @@ export default function App() {
       }
       return filtered;
     });
+  };
+
+  // Handle Loading of an imported ProjectSettings object
+  const handleLoadSettings = (loaded: ProjectSettings) => {
+    setRigs(loaded.rigs);
+    setActiveRigId(loaded.activeRigId || loaded.rigs[0].id);
+    if (loaded.projectName) setProjectName(loaded.projectName);
+    const foundPreset = STAGE_PRESETS.find(p => p.id === loaded.stagePresetId);
+    if (foundPreset) {
+      setCurrentStagePreset(foundPreset);
+      if (sceneManagerRef.current) {
+        sceneManagerRef.current.setStagePreset(foundPreset);
+      }
+    }
+    if (loaded.aspectMask) setAspectMask(loaded.aspectMask);
+    if (loaded.showGuides !== undefined) setShowGuides(loaded.showGuides);
+    if (loaded.showSafeAreas !== undefined) setShowSafeAreas(loaded.showSafeAreas);
+    if (loaded.directorLayout) setDirectorLayout(loaded.directorLayout);
+  };
+
+  // Reset to default factory cameras
+  const handleResetDefault = () => {
+    setRigs(INITIAL_RIGS);
+    setActiveRigId('cam-1');
+    setCurrentStagePreset(STAGE_PRESETS[0]);
+    if (sceneManagerRef.current) {
+      sceneManagerRef.current.setStagePreset(STAGE_PRESETS[0]);
+    }
+  };
+
+  // Quick Export JSON directly from Header button
+  const handleQuickExport = () => {
+    const settingsToExport: ProjectSettings = {
+      version: '1.0.0',
+      projectName,
+      savedAt: new Date().toISOString(),
+      stagePresetId: currentStagePreset.id,
+      activeRigId,
+      directorLayout,
+      aspectMask,
+      showGuides,
+      showSafeAreas,
+      rigs
+    };
+    const fileName = exportProjectToJson(settingsToExport, projectName);
+    handleNotify(`Configuración guardada en ${fileName}`, 'success');
+  };
+
+  // Quick Import JSON directly from Header button
+  const handleQuickImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const loaded = await importProjectFromJson(file);
+      handleLoadSettings(loaded);
+      handleNotify(`Configuración cargada con éxito (${loaded.rigs.length} cámaras restauradas)`, 'success');
+    } catch (err: any) {
+      handleNotify(`Error: ${err.message}`, 'error');
+    }
+    if (quickFileInputRef.current) quickFileInputRef.current.value = '';
   };
 
   // Cinematic Move Triggers
@@ -518,14 +639,13 @@ export default function App() {
     }
   };
 
-  // Compute CSS classes for the persistent 3D Arena and Optical POV containers
   const isDirectorSplit = mode === 'DIRECTOR' && directorLayout === 'SPLIT';
   const isDirectorPovDom = mode === 'DIRECTOR' && directorLayout === 'POV_DOMINANT';
   const isDirectorStageDom = mode === 'DIRECTOR' && directorLayout === 'STAGE_DOMINANT';
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-neutral-950 text-neutral-100 select-none">
-      {/* TOP HEADER: BRANDING, 3-MODE WORKFLOW SWITCHER & HELP BUTTON */}
+      {/* TOP HEADER: BRANDING, 3-MODE WORKFLOW SWITCHER, SAVE/OPEN JSON & HELP BUTTON */}
       <header className="h-13 bg-neutral-950/95 border-b border-neutral-800 px-4 flex items-center justify-between z-30 shrink-0 backdrop-blur-md">
         {/* Left: Branding */}
         <div className="flex items-center gap-3">
@@ -538,7 +658,7 @@ export default function App() {
             <h1 className="font-bold text-sm tracking-wider flex items-center gap-2">
               <span>CINESTAGE 3D</span>
               <span className="text-[10px] px-1.5 py-0.2 bg-cyan-600/20 text-cyan-400 border border-cyan-500/30 rounded font-mono font-normal hidden sm:inline">
-                ARCHITECTURAL 3D STAGE
+                PREVIZ
               </span>
             </h1>
           </div>
@@ -586,21 +706,54 @@ export default function App() {
           </button>
         </div>
 
-        {/* Right: Live PGM Status & Help Button */}
-        <div className="flex items-center gap-2.5">
-          <div className="hidden xl:flex items-center gap-2 font-mono text-xs bg-neutral-900 border border-neutral-800 px-3 py-1 rounded-full">
-            <span className="text-neutral-500">ON AIR:</span>
-            <span className="text-red-400 font-bold animate-pulse">
-              {rigs.find(r => r.tally === 'PROGRAM')?.name || 'NONE'}
-            </span>
-          </div>
+        {/* Right: SAVE / OPEN JSON BUTTONS, HELP & PGM STATUS */}
+        <div className="flex items-center gap-2">
+          {/* Quick Save .JSON */}
+          <button
+            onClick={handleQuickExport}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-cyan-400 border border-neutral-700 font-bold text-xs transition-colors cursor-pointer"
+            title="Descargar toda la configuración como archivo .json"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span className="hidden md:inline">Guardar JSON</span>
+          </button>
 
+          {/* Quick Open .JSON */}
+          <button
+            onClick={() => quickFileInputRef.current?.click()}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-indigo-400 border border-neutral-700 font-bold text-xs transition-colors cursor-pointer"
+            title="Cargar un archivo .json de configuración previa"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span className="hidden md:inline">Abrir JSON</span>
+          </button>
+
+          {/* Hidden file input for quick import */}
+          <input
+            ref={quickFileInputRef}
+            type="file"
+            accept=".json,application/json"
+            onChange={handleQuickImportFile}
+            className="hidden"
+          />
+
+          {/* Open full Settings Modal */}
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className="p-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border border-neutral-700 text-xs transition-colors cursor-pointer"
+            title="Ajustes de Guardado y Restauración"
+          >
+            <FileJson className="w-4 h-4 text-cyan-400" />
+          </button>
+
+          {/* Help Modal trigger */}
           <button
             onClick={() => setIsHelpOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 font-bold text-xs transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 font-bold text-xs transition-colors cursor-pointer"
+            title="Abrir guía de uso"
           >
             <HelpCircle className="w-4 h-4" />
-            <span>Ayuda / Guía</span>
+            <span className="hidden lg:inline">Ayuda</span>
           </button>
         </div>
       </header>
@@ -660,7 +813,7 @@ export default function App() {
 
       {/* MAIN PERSISTENT WORKSPACE BODY */}
       <div className="relative flex-1 w-full flex overflow-hidden">
-        {/* CENTER / LEFT VIEWPORTS STAGE (Holds persistent Arena & POV Canvases so they never unmount!) */}
+        {/* CENTER / LEFT VIEWPORTS STAGE */}
         <div
           className={`flex-1 relative flex overflow-hidden ${
             isDirectorSplit ? 'flex-col md:flex-row' : ''
@@ -728,7 +881,7 @@ export default function App() {
             )}
           </div>
 
-          {/* STAGING MODE OVERLAYS (Left Control Dock & Bottom Instructions) */}
+          {/* STAGING MODE OVERLAYS */}
           {mode === 'STAGING' && (
             <>
               <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 pointer-events-none bg-neutral-950/85 backdrop-blur-md px-4 py-2 rounded-xl border border-cyan-500/40 text-xs font-mono text-neutral-200 shadow-xl flex items-center gap-3">
@@ -805,7 +958,7 @@ export default function App() {
           )}
         </div>
 
-        {/* RIGHT DOCK IN DIRECTOR MODE: REAL-TIME RIG MOVEMENT CONTROLS CONSOLE */}
+        {/* RIGHT DOCK IN DIRECTOR MODE */}
         {mode === 'DIRECTOR' && (
           <div className="w-84 sm:w-96 p-3 bg-neutral-950/95 border-l border-neutral-800 overflow-y-auto shrink-0 z-20">
             <RigController
@@ -818,7 +971,7 @@ export default function App() {
         )}
 
         {/* ========================================================================= */}
-        {/* WORKFLOW 3: LIVE MULTIVIEWER WALL (Renders real-time 3D POV of all cams!) */}
+        {/* WORKFLOW 3: LIVE MULTIVIEWER WALL                                        */}
         {/* ========================================================================= */}
         {mode === 'MULTIVIEW' && (
           <div className="absolute inset-0 z-40 bg-neutral-950 p-4 flex flex-col gap-3">
@@ -872,7 +1025,7 @@ export default function App() {
                         : 'border-neutral-800 hover:border-neutral-600'
                     }`}
                   >
-                    {/* Real-Time 3D Optical POV Canvas for this Camera! */}
+                    {/* Real-Time 3D Optical POV Canvas */}
                     <canvas
                       ref={el => {
                         if (sceneManagerRef.current) {
@@ -1012,12 +1165,55 @@ export default function App() {
         </div>
       )}
 
+      {/* PROJECT SETTINGS (.JSON SAVE & OPEN) MODAL */}
+      <ProjectSettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        currentSettings={{
+          version: '1.0.0',
+          projectName,
+          savedAt: new Date().toISOString(),
+          stagePresetId: currentStagePreset.id,
+          activeRigId,
+          directorLayout,
+          aspectMask,
+          showGuides,
+          showSafeAreas,
+          rigs
+        }}
+        onLoadSettings={handleLoadSettings}
+        onResetDefault={handleResetDefault}
+        onNotify={handleNotify}
+      />
+
       {/* HELP & USER GUIDE MODAL */}
       <HelpModal
         isOpen={isHelpOpen}
         onClose={() => setIsHelpOpen(false)}
         onSelectMode={m => setMode(m)}
       />
+
+      {/* FLOATING TOAST NOTIFICATION */}
+      {toast && (
+        <div
+          className={`fixed bottom-5 right-5 z-50 flex items-center gap-2.5 px-4 py-2.5 rounded-xl border shadow-2xl backdrop-blur-md text-xs font-mono font-medium transition-all ${
+            toast.type === 'error'
+              ? 'bg-red-950/95 text-red-200 border-red-700/80 shadow-red-950/50'
+              : toast.type === 'info'
+              ? 'bg-blue-950/95 text-blue-200 border-blue-700/80 shadow-blue-950/50'
+              : 'bg-emerald-950/95 text-emerald-200 border-emerald-700/80 shadow-emerald-950/50'
+          }`}
+        >
+          {toast.type === 'error' ? (
+            <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+          ) : toast.type === 'info' ? (
+            <Info className="w-4 h-4 text-blue-400 shrink-0" />
+          ) : (
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          )}
+          <span>{toast.message}</span>
+        </div>
+      )}
     </div>
   );
 }

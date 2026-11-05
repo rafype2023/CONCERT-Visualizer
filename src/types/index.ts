@@ -115,3 +115,17 @@ export interface StagePreset {
   crowdDensity: 'PACKED' | 'MEDIUM' | 'ARENA_FULL';
 }
 
+export interface ProjectSettings {
+  version: string;
+  projectName: string;
+  savedAt: string;
+  stagePresetId: string;
+  activeRigId: string;
+  directorLayout?: 'SPLIT' | 'POV_DOMINANT' | 'STAGE_DOMINANT';
+  aspectMask?: AspectRatioMask;
+  showGuides?: boolean;
+  showSafeAreas?: boolean;
+  rigs: CameraRigState[];
+}
+
+

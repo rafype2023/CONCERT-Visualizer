@@ -207,6 +207,17 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose, onSelectM
                   </button>
                 </div>
               </div>
+
+              {/* SAVE & OPEN JSON FEATURE CARD */}
+              <div className="p-4 rounded-xl bg-neutral-950 border border-cyan-500/40 space-y-2">
+                <div className="flex items-center gap-2 text-cyan-400 font-bold text-sm">
+                  <Sparkles className="w-4 h-4" />
+                  <span>Capacidad de Guardar y Abrir Proyectos (.JSON)</span>
+                </div>
+                <p className="text-neutral-300">
+                  Puedes guardar el diseño completo de tus cámaras y rigs en cualquier momento haciendo clic en el botón <strong>"Guardar JSON"</strong> en la barra superior. Se descargará un archivo <code className="text-cyan-400">.json</code> a tu computadora con todas las coordenadas 3D, cuerpos de cámara, lentes, alturas y movimientos de cada rig. Cuando quieras continuar o compartirlo, simplemente haz clic en <strong>"Abrir JSON"</strong> para restaurar la producción exactamente como la dejaste.
+                </p>
+              </div>
             </div>
           )}
 
